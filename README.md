@@ -105,10 +105,21 @@ live, not just written:
 
 ```bash
 npm install
-npm run dev            # starts the Vite dev server on :5173
-node kane-bridge.mjs   # in a second terminal — starts the Kane bridge on :8787
-
 npx kane-cli login --oauth   # one-time auth, opens a browser
+
+npm run start   # starts both the dev server and the Kane bridge, then
+                 # opens http://localhost:5173 automatically
+```
+
+`npm run start` (`start.mjs`) is the one-command path: it launches the Vite
+dev server and `kane-bridge.mjs` together, waits for both to come up, and
+opens your browser to the app — no juggling two terminals.
+
+If you'd rather run them separately (e.g. to see each server's own logs):
+
+```bash
+npm run dev             # terminal 1 — Vite dev server on :5173
+node kane-bridge.mjs    # terminal 2 — Kane bridge on :8787
 ```
 
 Then open `http://localhost:5173`, type a feature request (or leave it
