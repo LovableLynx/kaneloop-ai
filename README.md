@@ -35,15 +35,21 @@ with evidence.
 
 ## Agent Strategy: Claude Code
 
-Claude Code runs natively as a terminal agent, driving the "Plan → Generate →
-Heal" lifecycle:
+Claude Code drives the "Plan → Generate → Heal" lifecycle, and the Heal step
+is **fully automatic — no terminal command, no human re-prompt**:
 
 1. **Plan** — break a feature request into one localized change.
 2. **Generate** — implement it inside `GeneratedSandbox` in `src/App.tsx`,
    with an explicit `data-testid` on every interactive element.
-3. **Heal** — run `kane-cli` against the live component. On failure, Claude
-   reads the NDJSON trace and Kane's own root-cause verdict, patches the
-   code, and re-runs until green — without guessing at what broke.
+3. **Heal** — `kane-bridge.mjs` runs `kane-cli` against the live component
+   and watches its NDJSON stream. The instant a `run_end` event reports
+   `status: "failed"`, the bridge itself — not a person — spawns
+   `claude -p` non-interactively with Kane's failure report and the
+   current `src/App.tsx` piped in, has it patch the file, then re-runs
+   `kane-cli` automatically. This repeats (capped at 2 attempts) until the
+   run passes or the cap is hit — zero keystrokes between "Generate
+   clicked" and "fixed and re-verified." See `runHeal` and the
+   `runEnd?.status === 'failed'` check in `kane-bridge.mjs`.
 
 This loop was used on itself during development: two live verification runs
 initially failed for a real reason (Kane's browser agent reordered a
@@ -59,11 +65,41 @@ runs before being considered reliable. See `kane-bridge.mjs`'s handling of
 Kane CLI is the verification layer, not a mock. It:
 
 - Parses plain-English behavioral criteria (`kane-cli run "<objective>"`)
-- Launches a real, headless, browser-driven pass against `GeneratedSandbox`
+- Launches a real, headless, browser-driven pass against the target page
 - Emits NDJSON (`--agent` flag) that `kane-bridge.mjs` streams to the UI
 - Returns a self-diagnosed pass/fail verdict — including root-cause
   analysis when a run fails, which is what let Claude self-heal without
   manual debugging
+
+The **Target URL** field isn't limited to `GeneratedSandbox` — point it at
+any `http://` or `https://` site (your own machine, another device on your
+network, or a public URL) and Kane will verify that instead. The bridge
+validates the target server-side before spawning anything: localhost and
+private-network ranges (10.x, 192.168.x, 172.16–31.x) are allowed, since
+testing your own machine or LAN is the point; link-local addresses
+(169.254.x, including cloud metadata endpoints like `169.254.169.254`) are
+blocked, since that range has no legitimate use as a test target and is a
+common SSRF probe vector.
+
+## Security
+
+This bridge spawns real processes (`kane-cli`, `claude -p` with file-edit
+access) from HTTP requests, so it's hardened against being driven by
+anything other than its own frontend — all of the following are verified
+live, not just written:
+
+- **Origin allowlist** — only requests from `localhost:5173`/`127.0.0.1:5173`
+  are accepted; any other page open in the same browser gets a 403.
+- **Concurrency cap** — a second simultaneous `/run` request gets a 429,
+  so nothing can queue up unbounded Kane/Claude processes.
+- **Content-hash diff-guard on Heal** — before and after every `claude -p`
+  invocation, every file's hash is snapshotted; anything that changed
+  outside `src/App.tsx` is automatically reverted (or deleted, if newly
+  created). This was adversarially tested and initially found broken twice
+  (filename-only diffing missed edits to already-dirty files; the revert
+  logic deleted instead of restoring pre-existing files) before landing on
+  the current implementation.
+- **URL allowlist** on the Target URL feature (see above).
 
 ## Running locally
 
