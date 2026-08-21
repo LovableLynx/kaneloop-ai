@@ -25,6 +25,7 @@ function App() {
   const [prompt, setPrompt] = useState('')
   const [status, setStatus] = useState<StatusTracker>(INITIAL_STATUS)
   const [logs, setLogs] = useState<string[]>([])
+  const [bridgeUnreachable, setBridgeUnreachable] = useState(false)
 
   const appendLog = useCallback((line: string) => {
     setLogs((prev) => [...prev, line])
@@ -37,6 +38,7 @@ function App() {
   const handleGenerate = useCallback(() => {
     setStatus(INITIAL_STATUS)
     setLogs([])
+    setBridgeUnreachable(false)
     const steps = prompt.trim() ? [prompt.trim()] : DEFAULT_STEPS
     const lastStepIndex = steps.length - 1
     appendLog(`> generate: ${steps.length} step(s) queued`)
@@ -74,6 +76,7 @@ function App() {
         'kane-bridge unreachable — this deployed preview has no local kane-cli bridge. Run this project locally (see README) for the live Plan → Generate → Verify loop.',
       )
       updateStatus({ plan: 'fail', generate: 'fail', verify: 'fail' })
+      setBridgeUnreachable(true)
       source.close()
     }
   }, [prompt, appendLog, updateStatus])
@@ -91,7 +94,7 @@ function App() {
           onGenerate={handleGenerate}
           status={status}
         />
-        <RightPanel />
+        <RightPanel bridgeUnreachable={bridgeUnreachable} />
       </div>
 
       <LogConsole logs={logs} />
@@ -160,10 +163,17 @@ function StatusStepper({ status }: { status: StatusTracker }) {
   )
 }
 
-function RightPanel() {
+function RightPanel({ bridgeUnreachable }: { bridgeUnreachable: boolean }) {
   return (
     <div className="pane right">
       <div className="pane-header">Live Preview</div>
+      {bridgeUnreachable && (
+        <div className="bridge-note" data-testid="bridge-unreachable-note">
+          This preview runs client-side only — Verify can't reach a local
+          kane-cli bridge from this deployed site. Clone and run locally to
+          see it actually verified.
+        </div>
+      )}
       <div className="sandbox-card" data-testid="sandbox-card">
         <div className="sandbox-card-label">GeneratedSandbox</div>
         <div className="sandbox-card-body" data-testid="sandbox-frame">

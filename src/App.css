@@ -173,6 +173,17 @@ body,
   color: #fff;
 }
 
+.bridge-note {
+  background: #3d1c1c;
+  border: 1px solid #6e2727;
+  color: #ffb4ab;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
 /* GeneratedSandbox card */
 
 .sandbox-card {
