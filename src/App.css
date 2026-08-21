@@ -66,7 +66,19 @@ body,
   margin-top: 0;
 }
 
-/* Prompt input + generate button */
+/* Target URL + prompt input + generate button */
+
+.url-input {
+  width: 100%;
+  background: #161b22;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: 'Cascadia Code', monospace;
+  font-size: 13px;
+  box-sizing: border-box;
+}
 
 .prompt-input {
   width: 100%;

@@ -21,8 +21,11 @@ const DEFAULT_STEPS = [
   `Navigate to http://localhost:5173. Click the element with data-testid=increment-btn. Then read the text of the element with data-testid=count-display. Assert it equals exactly 'Count: 1'.`,
 ]
 
+const DEFAULT_TARGET_URL = 'http://localhost:5173'
+
 function App() {
   const [prompt, setPrompt] = useState('')
+  const [targetUrl, setTargetUrl] = useState('')
   const [status, setStatus] = useState<StatusTracker>(INITIAL_STATUS)
   const [logs, setLogs] = useState<string[]>([])
   const [bridgeUnreachable, setBridgeUnreachable] = useState(false)
@@ -39,9 +42,27 @@ function App() {
     setStatus(INITIAL_STATUS)
     setLogs([])
     setBridgeUnreachable(false)
-    const steps = prompt.trim() ? [prompt.trim()] : DEFAULT_STEPS
+
+    const rawUrl = targetUrl.trim() || DEFAULT_TARGET_URL
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(rawUrl)
+    } catch {
+      appendLog(`invalid target URL: "${rawUrl}"`)
+      updateStatus({ plan: 'fail', generate: 'fail', verify: 'fail' })
+      return
+    }
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      appendLog(`unsupported URL scheme: "${parsedUrl.protocol}" — only http/https allowed`)
+      updateStatus({ plan: 'fail', generate: 'fail', verify: 'fail' })
+      return
+    }
+
+    const steps = prompt.trim()
+      ? [`Navigate to ${parsedUrl.toString()}. ${prompt.trim()}`]
+      : DEFAULT_STEPS
     const lastStepIndex = steps.length - 1
-    appendLog(`> generate: ${steps.length} step(s) queued`)
+    appendLog(`> generate: ${steps.length} step(s) queued against ${parsedUrl.origin}`)
 
     let currentStepIndex = 0
 
@@ -79,7 +100,7 @@ function App() {
       setBridgeUnreachable(true)
       source.close()
     }
-  }, [prompt, appendLog, updateStatus])
+  }, [prompt, targetUrl, appendLog, updateStatus])
 
   return (
     <div className="playground">
@@ -91,6 +112,8 @@ function App() {
         <LeftPanel
           prompt={prompt}
           onPromptChange={setPrompt}
+          targetUrl={targetUrl}
+          onTargetUrlChange={setTargetUrl}
           onGenerate={handleGenerate}
           status={status}
         />
@@ -105,16 +128,31 @@ function App() {
 function LeftPanel({
   prompt,
   onPromptChange,
+  targetUrl,
+  onTargetUrlChange,
   onGenerate,
   status,
 }: {
   prompt: string
   onPromptChange: (value: string) => void
+  targetUrl: string
+  onTargetUrlChange: (value: string) => void
   onGenerate: () => void
   status: StatusTracker
 }) {
   return (
     <div className="pane left">
+      <div className="pane-header">Target URL</div>
+      <input
+        className="url-input"
+        data-testid="target-url-input"
+        type="text"
+        placeholder={DEFAULT_TARGET_URL}
+        value={targetUrl}
+        onChange={(e) => onTargetUrlChange(e.target.value)}
+        spellCheck={false}
+      />
+
       <div className="pane-header">Feature Request</div>
       <textarea
         className="prompt-input"

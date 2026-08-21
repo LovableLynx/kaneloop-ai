@@ -39,6 +39,32 @@ const ALLOWED_ORIGINS = new Set([
 let activeRunCount = 0
 const MAX_CONCURRENT_RUNS = 1
 
+// Steps can now target any http(s) URL a user types in the "Target URL"
+// field (prefixed onto the objective as "Navigate to <url>. ..." by the
+// frontend). localhost and RFC1918 private-network ranges (10.x, 192.168.x,
+// 172.16-31.x) are allowed — testing your own machine or another device on
+// your local/office network is the whole point of this field. The one
+// range still blocked is link-local (169.254.x), which has no legitimate
+// use as a Kane test target and is how cloud metadata endpoints
+// (169.254.169.254) are commonly probed in SSRF attacks.
+function isBlockedHost(hostname) {
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    return false
+  }
+  const ipv4 = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (ipv4) {
+    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])]
+    if (a === 169 && b === 254) return true // link-local incl. cloud metadata
+    return false
+  }
+  return false
+}
+
+function extractNavigateUrl(step) {
+  const match = /^Navigate to (\S+)\./.exec(step)
+  return match ? match[1] : null
+}
+
 const server = createServer((req, res) => {
   const origin = req.headers.origin
   // Requests with no Origin header (e.g. curl, kane-cli's own browser
@@ -86,6 +112,24 @@ const server = createServer((req, res) => {
       res.writeHead(400, { 'Content-Type': 'text/plain' })
       res.end('missing objective or steps query param')
       return
+    }
+
+    for (const step of steps) {
+      const navUrl = extractNavigateUrl(String(step))
+      if (!navUrl) continue
+      let hostname
+      try {
+        hostname = new URL(navUrl).hostname
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        res.end(`invalid navigate URL: ${navUrl}`)
+        return
+      }
+      if (isBlockedHost(hostname)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' })
+        res.end(`target host not allowed: ${hostname}`)
+        return
+      }
     }
 
     activeRunCount += 1
