@@ -186,16 +186,109 @@ function RightPanel({ bridgeUnreachable }: { bridgeUnreachable: boolean }) {
 
 function GeneratedSandbox() {
   const [count, setCount] = useState(0)
+  const [name, setName] = useState('')
+  const [darkMode, setDarkMode] = useState(false)
+  const [email, setEmail] = useState('')
+  const [todoInput, setTodoInput] = useState('')
+  const [todos, setTodos] = useState<string[]>([])
+
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+
+  const addTodo = () => {
+    const trimmed = todoInput.trim()
+    if (!trimmed) return
+    setTodos((prev) => [...prev, trimmed])
+    setTodoInput('')
+  }
 
   return (
-    <div className="preview-app" data-testid="generated-sandbox">
-      <p data-testid="count-display">Count: {count}</p>
-      <button
-        data-testid="increment-btn"
-        onClick={() => setCount((c) => c + 1)}
-      >
-        Increment
-      </button>
+    <div
+      className={`preview-app${darkMode ? ' preview-app-dark' : ''}`}
+      data-testid="generated-sandbox"
+    >
+      {/* 1. Counter — click interaction */}
+      <section className="feature-block">
+        <p data-testid="count-display">Count: {count}</p>
+        <button
+          data-testid="increment-btn"
+          onClick={() => setCount((c) => c + 1)}
+        >
+          Increment
+        </button>
+      </section>
+
+      {/* 2. Name greeting — text input + read */}
+      <section className="feature-block">
+        <input
+          data-testid="name-input"
+          type="text"
+          placeholder="Your name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <p data-testid="greeting-display">
+          {name.trim() ? `Hello, ${name.trim()}!` : 'Hello, stranger!'}
+        </p>
+      </section>
+
+      {/* 3. Dark-mode toggle — visual/attribute state */}
+      <section className="feature-block">
+        <label>
+          <input
+            data-testid="dark-mode-toggle"
+            type="checkbox"
+            checked={darkMode}
+            onChange={(e) => setDarkMode(e.target.checked)}
+          />
+          Dark mode
+        </label>
+        <span data-testid="dark-mode-status">
+          {darkMode ? 'Dark mode: on' : 'Dark mode: off'}
+        </span>
+      </section>
+
+      {/* 4. Email validation — conditional logic */}
+      <section className="feature-block">
+        <input
+          data-testid="email-input"
+          type="text"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <p data-testid="email-validation-message">
+          {email.length === 0
+            ? ''
+            : isValidEmail
+              ? 'Valid email'
+              : 'Invalid email'}
+        </p>
+      </section>
+
+      {/* 5. Todo list — growing list state */}
+      <section className="feature-block">
+        <input
+          data-testid="todo-input"
+          type="text"
+          placeholder="Add a todo"
+          value={todoInput}
+          onChange={(e) => setTodoInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') addTodo()
+          }}
+        />
+        <button data-testid="todo-add-btn" onClick={addTodo}>
+          Add
+        </button>
+        <ul data-testid="todo-list">
+          {todos.map((todo, i) => (
+            <li key={i} data-testid={`todo-item-${i}`}>
+              {todo}
+            </li>
+          ))}
+        </ul>
+        <span data-testid="todo-count">{todos.length} item(s)</span>
+      </section>
     </div>
   )
 }
