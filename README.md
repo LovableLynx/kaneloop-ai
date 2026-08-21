@@ -6,7 +6,7 @@ verifying it actually works: describe a change, generate it, and have
 drive a real browser against the running app to confirm it — pass or fail,
 with evidence.
 
-**Live preview (UI only):** _add your Vercel URL here_
+**Live preview (UI only):** https://kaneloop-ai.vercel.app
 > The deployed preview renders the full interface (prompt input, Plan /
 > Generate / Verify status tracker, log console, `GeneratedSandbox`), but
 > Kane CLI needs a local process to spawn a real browser — that can't run on
