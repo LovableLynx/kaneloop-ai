@@ -102,6 +102,17 @@ export function parseKaneLine(line: string, isFinalStep = true): KaneEventResult
         statusPatch: { verify: 'fail' },
       }
 
+    case 'ask_user':
+      // Kane needs input it can't get on its own (most commonly login
+      // credentials for a real site). There's no interactive channel back
+      // to Kane from this UI, so rather than let the run hang until Kane's
+      // own internal timeout kills it, surface this clearly and fail fast.
+      // Supplying credentials via the "Login" fields avoids this entirely.
+      return {
+        log: `verify: Kane needs input it didn't have — "${event.question}". Provide credentials in the Login fields, or make the objective self-contained.`,
+        statusPatch: { verify: 'fail' },
+      }
+
     default: {
       // Step progress events: {"step":N,"status":"running"|"done","remark":"..."}
       if (typeof event.step === 'number' && typeof event.status === 'string') {

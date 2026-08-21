@@ -49,6 +49,8 @@ body,
 .pane.left {
   flex: 1;
   border-right: 1px solid #21262d;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .pane.right {
@@ -78,6 +80,11 @@ body,
   font-family: 'Cascadia Code', monospace;
   font-size: 13px;
   box-sizing: border-box;
+  margin-bottom: 6px;
+}
+
+.credential-input {
+  border-color: #4d3800;
 }
 
 .prompt-input {

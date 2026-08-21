@@ -82,119 +82,161 @@ const server = createServer((req, res) => {
 
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
 
-  if (req.method === 'GET' && url.pathname === '/run') {
+  if (req.method === 'POST' && url.pathname === '/run') {
     if (activeRunCount >= MAX_CONCURRENT_RUNS) {
       res.writeHead(429, { 'Content-Type': 'text/plain' })
       res.end('a run is already in progress')
       return
     }
-    // `steps` (JSON array of objective strings) takes precedence over the
-    // single `objective` param. Each step runs as its own kane-cli process,
-    // strictly sequential — step N+1 only spawns after step N's process
-    // exits, which guarantees ordering that a single multi-step prose
-    // objective could not (the agent was observed reordering "read before
-    // click" steps within one run).
-    const stepsParam = url.searchParams.get('steps')
-    const objective = url.searchParams.get('objective')
 
-    let steps
-    if (stepsParam) {
-      try {
-        steps = JSON.parse(stepsParam)
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'text/plain' })
-        res.end('steps param must be a JSON array of strings')
-        return
-      }
-    } else if (objective) {
-      steps = [objective]
-    } else {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += chunk
+      // Guard against an unbounded request body.
+      if (body.length > 1_000_000) req.destroy()
+    })
+    req.on('end', () => handleRun(req, res, body))
+    return
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain' })
+  res.end('not found')
+})
+
+function handleRun(req, res, rawBody) {
+  let parsedBody
+  try {
+    parsedBody = JSON.parse(rawBody)
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain' })
+    res.end('body must be JSON')
+    return
+  }
+
+  // Credentials travel in the POST body only, never in a URL/query string
+  // (which can land in server access logs, browser history, or a Referer
+  // header). They're passed to kane-cli as --variables with secret:true,
+  // which keeps Kane from echoing the values back into its own NDJSON
+  // output; redactSecrets() below is a second layer of defense in case
+  // that guarantee ever has a gap.
+  const { steps: stepsInput, objective, credentials } = parsedBody
+
+  let steps
+  if (stepsInput) {
+    if (!Array.isArray(stepsInput)) {
       res.writeHead(400, { 'Content-Type': 'text/plain' })
-      res.end('missing objective or steps query param')
+      res.end('steps must be an array of strings')
       return
     }
+    steps = stepsInput
+  } else if (objective) {
+    steps = [objective]
+  } else {
+    res.writeHead(400, { 'Content-Type': 'text/plain' })
+    res.end('missing objective or steps in body')
+    return
+  }
 
-    for (const step of steps) {
-      const navUrl = extractNavigateUrl(String(step))
-      if (!navUrl) continue
-      let hostname
-      try {
-        hostname = new URL(navUrl).hostname
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'text/plain' })
-        res.end(`invalid navigate URL: ${navUrl}`)
-        return
-      }
-      if (isBlockedHost(hostname)) {
-        res.writeHead(403, { 'Content-Type': 'text/plain' })
-        res.end(`target host not allowed: ${hostname}`)
-        return
-      }
+  const secretValues = []
+  let variablesJson = null
+  if (credentials && (credentials.username || credentials.password)) {
+    const vars = {}
+    if (credentials.username) {
+      vars.user = { value: credentials.username, secret: true }
+      secretValues.push(credentials.username)
     }
-
-    activeRunCount += 1
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    })
-
-    const send = (line) => {
-      const trimmed = line.trim()
-      if (!trimmed) return
-      res.write(`data: ${trimmed}\n\n`)
+    if (credentials.password) {
+      vars.password = { value: credentials.password, secret: true }
+      secretValues.push(credentials.password)
     }
+    variablesJson = JSON.stringify(vars)
+  }
 
-    let aborted = false
-    req.on('close', () => {
-      activeRunCount = Math.max(0, activeRunCount - 1)
-      aborted = true
-    })
+  for (const step of steps) {
+    const navUrl = extractNavigateUrl(String(step))
+    if (!navUrl) continue
+    let hostname
+    try {
+      hostname = new URL(navUrl).hostname
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain' })
+      res.end(`invalid navigate URL: ${navUrl}`)
+      return
+    }
+    if (isBlockedHost(hostname)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' })
+      res.end(`target host not allowed: ${hostname}`)
+      return
+    }
+  }
 
-    const runStep = (stepObjective, index) =>
-      new Promise((resolve) => {
-        if (aborted) return resolve({ exitCode: 1, runEnd: null })
-        send(`{"type":"bridge_step_start","step_index":${index}}`)
+  activeRunCount += 1
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  })
 
-        const child = spawn(process.execPath, [
-          KANE_ENTRY,
-          'run',
-          stepObjective,
-          '--agent',
-          '--headless',
-          '--timeout',
-          '120',
-        ])
+  const send = (line) => {
+    const trimmed = redactSecrets(line.trim(), secretValues)
+    if (!trimmed) return
+    res.write(`data: ${trimmed}\n\n`)
+  }
 
-        let buffer = ''
-        let runEnd = null
-        child.stdout.on('data', (chunk) => {
-          buffer += chunk.toString()
-          const lines = buffer.split('\n')
-          buffer = lines.pop() ?? ''
-          for (const line of lines) {
-            send(line)
-            const parsed = tryParseJson(line)
-            if (parsed?.type === 'run_end') runEnd = parsed
-          }
-        })
+  let aborted = false
+  req.on('close', () => {
+    activeRunCount = Math.max(0, activeRunCount - 1)
+    aborted = true
+  })
 
-        child.stderr.on('data', (chunk) => {
-          send(`stderr: ${chunk.toString()}`)
-        })
+  const runStep = (stepObjective, index) =>
+    new Promise((resolve) => {
+      if (aborted) return resolve({ exitCode: 1, runEnd: null })
+      send(`{"type":"bridge_step_start","step_index":${index}}`)
 
-        child.on('close', (code) => {
-          if (buffer) {
-            send(buffer)
-            const parsed = tryParseJson(buffer)
-            if (parsed?.type === 'run_end') runEnd = parsed
-          }
-          send(`{"type":"bridge_step_end","step_index":${index},"exit_code":${code}}`)
-          resolve({ exitCode: code ?? 0, runEnd })
-        })
+      const args = [
+        KANE_ENTRY,
+        'run',
+        stepObjective,
+        '--agent',
+        '--headless',
+        '--timeout',
+        '120',
+      ]
+      if (variablesJson) {
+        args.push('--variables', variablesJson)
+      }
+      const child = spawn(process.execPath, args)
 
-        req.on('close', () => child.kill())
+      let buffer = ''
+      let runEnd = null
+      child.stdout.on('data', (chunk) => {
+        buffer += chunk.toString()
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          send(line)
+          const parsed = tryParseJson(line)
+          if (parsed?.type === 'run_end') runEnd = parsed
+        }
       })
+
+      child.stderr.on('data', (chunk) => {
+        send(`stderr: ${chunk.toString()}`)
+      })
+
+      child.on('close', (code) => {
+        if (buffer) {
+          send(buffer)
+          const parsed = tryParseJson(buffer)
+          if (parsed?.type === 'run_end') runEnd = parsed
+        }
+        send(`{"type":"bridge_step_end","step_index":${index},"exit_code":${code}}`)
+        resolve({ exitCode: code ?? 0, runEnd })
+      })
+
+      req.on('close', () => child.kill())
+    })
 
     const runHeal = async (failedObjective, runEnd, attempt) => {
       if (aborted) return false
@@ -317,13 +359,7 @@ const server = createServer((req, res) => {
         res.end()
       }
     })()
-
-    return
-  }
-
-  res.writeHead(404, { 'Content-Type': 'text/plain' })
-  res.end('not found')
-})
+}
 
 server.listen(PORT, () => {
   console.log(`kane-bridge listening on http://localhost:${PORT}`)
@@ -335,6 +371,21 @@ function tryParseJson(line) {
   } catch {
     return null
   }
+}
+
+// Defense in depth: Kane's `secret: true` on --variables is meant to keep
+// credential values out of its own NDJSON output, but nothing here should
+// rely solely on a third-party CLI's guarantee for something as sensitive
+// as a password. Every line streamed to the browser is checked against the
+// actual submitted credential values and masked if found, regardless of
+// where in Kane's output they surface.
+function redactSecrets(line, secretValues) {
+  let result = line
+  for (const value of secretValues) {
+    if (!value) continue
+    result = result.split(value).join('[REDACTED]')
+  }
+  return result
 }
 
 const APP_TSX_REL = path.relative(__dirname, APP_TSX_PATH).split(path.sep).join('/')

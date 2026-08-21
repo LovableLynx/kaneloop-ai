@@ -26,6 +26,8 @@ const DEFAULT_TARGET_URL = 'http://localhost:5173'
 function App() {
   const [prompt, setPrompt] = useState('')
   const [targetUrl, setTargetUrl] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [status, setStatus] = useState<StatusTracker>(INITIAL_STATUS)
   const [logs, setLogs] = useState<string[]>([])
   const [bridgeUnreachable, setBridgeUnreachable] = useState(false)
@@ -38,7 +40,7 @@ function App() {
     setStatus((prev) => ({ ...prev, ...patch }))
   }, [])
 
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
     setStatus(INITIAL_STATUS)
     setLogs([])
     setBridgeUnreachable(false)
@@ -58,49 +60,84 @@ function App() {
       return
     }
 
+    const hasCredentials = username.trim() || password.trim()
+    const loginPrefix = hasCredentials
+      ? 'If a login/sign-in is required, log in using username {{user}} and password {{password}} first. '
+      : ''
+
     const steps = prompt.trim()
-      ? [`Navigate to ${parsedUrl.toString()}. ${prompt.trim()}`]
+      ? [`Navigate to ${parsedUrl.toString()}. ${loginPrefix}${prompt.trim()}`]
       : DEFAULT_STEPS
     const lastStepIndex = steps.length - 1
     appendLog(`> generate: ${steps.length} step(s) queued against ${parsedUrl.origin}`)
 
     let currentStepIndex = 0
 
-    const url = `${KANE_BRIDGE_URL}?steps=${encodeURIComponent(JSON.stringify(steps))}`
-    const source = new EventSource(url)
-
-    source.onmessage = (event) => {
+    const handleLine = (line: string) => {
       let stepIndexHint: number | null = null
       try {
-        const parsed = JSON.parse(event.data)
+        const parsed = JSON.parse(line)
         if (typeof parsed.step_index === 'number') stepIndexHint = parsed.step_index
       } catch {
         // not a bridge marker event, ignore
       }
       if (stepIndexHint !== null) currentStepIndex = stepIndexHint
 
-      const { log, statusPatch } = parseKaneLine(event.data, currentStepIndex === lastStepIndex)
+      const { log, statusPatch } = parseKaneLine(line, currentStepIndex === lastStepIndex)
       if (log) appendLog(log)
       if (statusPatch) updateStatus(statusPatch)
     }
 
-    source.addEventListener('close', () => {
-      source.close()
-    })
-
-    source.onerror = () => {
-      // EventSource auto-retries by default; on a hosted/static deploy the
-      // bridge is never reachable, so without an explicit close+fail here
-      // the UI would sit on "pending" forever and look broken rather than
-      // "needs the local bridge server".
+    // POST (not the old EventSource/GET) so credentials travel in the body,
+    // never in a URL query string — see kane-bridge.mjs's handleRun comment
+    // for why that matters.
+    let response: Response
+    try {
+      response = await fetch(KANE_BRIDGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          steps,
+          credentials:
+            username || password ? { username, password } : undefined,
+        }),
+      })
+    } catch {
       appendLog(
         'kane-bridge unreachable — this deployed preview has no local kane-cli bridge. Run this project locally (see README) for the live Plan → Generate → Verify loop.',
       )
       updateStatus({ plan: 'fail', generate: 'fail', verify: 'fail' })
       setBridgeUnreachable(true)
-      source.close()
+      return
     }
-  }, [prompt, targetUrl, appendLog, updateStatus])
+
+    if (!response.ok || !response.body) {
+      const text = await response.text().catch(() => '')
+      appendLog(`kane-bridge error (${response.status}): ${text}`)
+      updateStatus({ plan: 'fail', generate: 'fail', verify: 'fail' })
+      return
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // Wire format is SSE-style "data: <line>\n\n" chunks.
+      const events = buffer.split('\n\n')
+      buffer = events.pop() ?? ''
+      for (const evt of events) {
+        const dataLine = evt
+          .split('\n')
+          .find((l) => l.startsWith('data: '))
+        if (dataLine) handleLine(dataLine.slice('data: '.length))
+      }
+    }
+  }, [prompt, targetUrl, username, password, appendLog, updateStatus])
 
   return (
     <div className="playground">
@@ -114,6 +151,10 @@ function App() {
           onPromptChange={setPrompt}
           targetUrl={targetUrl}
           onTargetUrlChange={setTargetUrl}
+          username={username}
+          onUsernameChange={setUsername}
+          password={password}
+          onPasswordChange={setPassword}
           onGenerate={handleGenerate}
           status={status}
         />
@@ -130,6 +171,10 @@ function LeftPanel({
   onPromptChange,
   targetUrl,
   onTargetUrlChange,
+  username,
+  onUsernameChange,
+  password,
+  onPasswordChange,
   onGenerate,
   status,
 }: {
@@ -137,6 +182,10 @@ function LeftPanel({
   onPromptChange: (value: string) => void
   targetUrl: string
   onTargetUrlChange: (value: string) => void
+  username: string
+  onUsernameChange: (value: string) => void
+  password: string
+  onPasswordChange: (value: string) => void
   onGenerate: () => void
   status: StatusTracker
 }) {
@@ -151,6 +200,29 @@ function LeftPanel({
         value={targetUrl}
         onChange={(e) => onTargetUrlChange(e.target.value)}
         spellCheck={false}
+      />
+
+      <div className="pane-header">
+        Login (optional — only used if the target site needs it)
+      </div>
+      <input
+        className="url-input"
+        data-testid="username-input"
+        type="text"
+        placeholder="username / email"
+        value={username}
+        onChange={(e) => onUsernameChange(e.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <input
+        className="url-input credential-input"
+        data-testid="password-input"
+        type="password"
+        placeholder="password"
+        value={password}
+        onChange={(e) => onPasswordChange(e.target.value)}
+        autoComplete="off"
       />
 
       <div className="pane-header">Feature Request</div>
