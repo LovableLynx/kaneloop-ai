@@ -98,6 +98,7 @@ body,
   font-family: inherit;
   font-size: 13px;
   resize: vertical;
+  box-sizing: border-box;
 }
 
 .generate-btn {

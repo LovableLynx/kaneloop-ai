@@ -82,6 +82,21 @@ const server = createServer((req, res) => {
 
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
 
+  // The switch from EventSource (GET) to fetch() with a JSON body (POST)
+  // means the browser now sends a CORS preflight OPTIONS request before
+  // the real POST — without a handler for it, the browser blocks the
+  // actual request entirely (confirmed live: fetch failed with a CORS
+  // preflight error until this was added).
+  if (req.method === 'OPTIONS' && url.pathname === '/run') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '600',
+    })
+    res.end()
+    return
+  }
+
   if (req.method === 'POST' && url.pathname === '/run') {
     if (activeRunCount >= MAX_CONCURRENT_RUNS) {
       res.writeHead(429, { 'Content-Type': 'text/plain' })
@@ -184,7 +199,15 @@ function handleRun(req, res, rawBody) {
   }
 
   let aborted = false
-  req.on('close', () => {
+  // res.on('close'), not req.on('close'): the request's own 'close' fires
+  // as soon as its (short, already-fully-read) body finishes streaming in
+  // — which happens on every normal request, immediately, not just on a
+  // client disconnect. That falsely marked every run as aborted the
+  // instant it started, killing the freshly-spawned kane-cli child before
+  // it could do anything (confirmed live: exit_code was always null,
+  // i.e. killed by signal, on every run). res's 'close' only fires when
+  // the client actually stops receiving the response stream.
+  res.on('close', () => {
     activeRunCount = Math.max(0, activeRunCount - 1)
     aborted = true
   })
@@ -206,7 +229,10 @@ function handleRun(req, res, rawBody) {
       if (variablesJson) {
         args.push('--variables', variablesJson)
       }
-      const child = spawn(process.execPath, args)
+      // Explicit cwd: kane-cli resolves some of its own state relative to
+      // process.cwd(), so this must not depend on whatever directory the
+      // bridge process itself happened to be launched from.
+      const child = spawn(process.execPath, args, { cwd: __dirname })
 
       let buffer = ''
       let runEnd = null
@@ -235,7 +261,7 @@ function handleRun(req, res, rawBody) {
         resolve({ exitCode: code ?? 0, runEnd })
       })
 
-      req.on('close', () => child.kill())
+      res.on('close', () => child.kill())
     })
 
     const runHeal = async (failedObjective, runEnd, attempt) => {
@@ -321,7 +347,7 @@ function handleRun(req, res, rawBody) {
           resolve(code === 0)
         })
 
-        req.on('close', () => child.kill())
+        res.on('close', () => child.kill())
       })
     }
 
